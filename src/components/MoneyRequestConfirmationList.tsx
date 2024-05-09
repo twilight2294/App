@@ -688,7 +688,7 @@ function MoneyRequestConfirmationList({
 
                 playSound(SOUNDS.DONE);
                 setDidConfirm(true);
-                onConfirm?.(selectedParticipants);
+                onConfirm?.([]); // passed participants...
             }
         },
         [
