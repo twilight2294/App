@@ -10,11 +10,10 @@ source "$SCRIPTS_DIR/shellUtils.sh"
 # Wrapper to run patch-package.
 function patchPackage {
   OS="$(uname)"
-  if [[ "$OS" == "Darwin" || "$OS" == "Linux" ]]; then
+  if [[ "$CI" == "true" || "$OS" != "Darwin" ]]; then
     npx patch-package --error-on-fail
   else
-    error "Unsupported OS: $OS"
-    exit 1
+    script -q /dev/null npx patch-package --error-on-fail
   fi
 }
 
