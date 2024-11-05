@@ -1421,6 +1421,7 @@ type PolicyReportField = {
 
     /** Unique id of the field */
     fieldID: string;
+    
 
     /** Position at which the field should show up relative to the other fields */
     orderWeight: number;
