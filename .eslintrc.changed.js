@@ -7,4 +7,6 @@ module.exports = {
     rules: {
         'deprecation/deprecation': 'error',
     },
+
+    
 };
