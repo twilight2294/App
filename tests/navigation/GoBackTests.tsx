@@ -68,6 +68,53 @@ describe('Go back on the narrow layout', () => {
         });
     });
 
+    it('We should navigate to the workspace confirmation page when clicked and then when we goBack, we should again land on workspaces page', () => {
+        // Given the initialized navigation on the narrow layout with the settings split navigator
+        render(
+            <TestNavigationContainer
+                initialState={{
+                    index: 0,
+                    routes: [
+                        {
+                            name: NAVIGATORS.SETTINGS_SPLIT_NAVIGATOR,
+                            state: {
+                                index: 1,
+                                routes: [
+                                    {
+                                        name: SCREENS.SETTINGS.ROOT,
+                                    },
+                                    {
+                                        name: SCREENS.SETTINGS.PROFILE.ROOT,
+                                    },
+                                    {
+                                        name: SCREENS.SETTINGS.WORKSPACES,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                }}
+            />,
+        );
+
+        act(() => {
+            Navigation.navigate(ROUTES.WORKSPACE_CONFIRMATION.getRoute());
+        });
+
+        const WorkspaceConfirmationAfterNavigation = navigationRef.current?.getRootState().routes.at(-1);
+
+        expect(WorkspaceConfirmationAfterNavigation?.state?.index).toBe(0);
+        expect(WorkspaceConfirmationAfterNavigation?.state?.routes.at(-1)?.name).toBe(SCREENS.RIGHT_MODAL.WORKSPACE_CONFIRMATION);
+        act(() => {
+            Navigation.goBack();
+        });
+
+        const settingsSplitAfterGoBack = navigationRef.current?.getRootState().routes.at(-1);
+
+        expect(settingsSplitAfterGoBack?.state?.index).toBe(2);
+        expect(settingsSplitAfterGoBack?.state?.routes.at(-1)?.name).toBe(SCREENS.SETTINGS.WORKSPACES);
+    });
+
     describe('called with fallbackRoute param', () => {
         it('Should go back to the page passed to goBack as a fallbackRoute', () => {
             // Given the initialized navigation on the narrow layout with the settings split navigator
