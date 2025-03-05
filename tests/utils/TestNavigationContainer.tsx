@@ -4,7 +4,7 @@ import React from 'react';
 import createRootStackNavigator from '@libs/Navigation/AppNavigator/createRootStackNavigator';
 import createSplitNavigator from '@libs/Navigation/AppNavigator/createSplitNavigator';
 import navigationRef from '@libs/Navigation/navigationRef';
-import type {AuthScreensParamList, ReportsSplitNavigatorParamList, SettingsSplitNavigatorParamList} from '@libs/Navigation/types';
+import {type AuthScreensParamList, type ReportsSplitNavigatorParamList, RightModalNavigatorParamList, type SettingsSplitNavigatorParamList} from '@libs/Navigation/types';
 import CONST from '@src/CONST';
 import NAVIGATORS from '@src/NAVIGATORS';
 import SCREENS from '@src/SCREENS';
@@ -12,6 +12,7 @@ import SCREENS from '@src/SCREENS';
 const RootStack = createRootStackNavigator<AuthScreensParamList>();
 const ReportsSplit = createSplitNavigator<ReportsSplitNavigatorParamList>();
 const SettingsSplit = createSplitNavigator<SettingsSplitNavigatorParamList>();
+const RightModalStack = createRootStackNavigator<RightModalNavigatorParamList>();
 
 type TestNavigationContainerProps = {initialState: InitialState};
 
@@ -57,7 +58,22 @@ function TestSettingsSplitNavigator() {
                 name={SCREENS.SETTINGS.ABOUT}
                 getComponent={() => jest.fn()}
             />
+            <SettingsSplit.Screen
+                name={SCREENS.SETTINGS.WORKSPACES}
+                getComponent={() => jest.fn()}
+            />
         </SettingsSplit.Navigator>
+    );
+}
+
+function TestRightModalNavigator() {
+    return (
+        <RightModalStack.Navigator>
+            <RightModalStack.Screen
+                name={SCREENS.RIGHT_MODAL.WORKSPACE_CONFIRMATION}
+                getComponent={() => jest.fn()}
+            />
+        </RightModalStack.Navigator>
     );
 }
 
@@ -79,6 +95,10 @@ function TestNavigationContainer({initialState}: TestNavigationContainerProps) {
                 <RootStack.Screen
                     name={SCREENS.SEARCH.ROOT}
                     getComponent={() => jest.fn()}
+                />
+                <RootStack.Screen
+                    name={NAVIGATORS.RIGHT_MODAL_NAVIGATOR}
+                    component={TestRightModalNavigator}
                 />
             </RootStack.Navigator>
         </NavigationContainer>
