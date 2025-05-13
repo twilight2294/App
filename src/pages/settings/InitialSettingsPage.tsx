@@ -1,540 +1,761 @@
-import HybridAppModule from '@expensify/react-native-hybrid-app/src';
-import {findFocusedRoute, useNavigationState, useRoute} from '@react-navigation/native';
-import React, {useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
-// eslint-disable-next-line no-restricted-imports
-import type {GestureResponderEvent, ScrollView as RNScrollView, ScrollViewProps, StyleProp, ViewStyle} from 'react-native';
-import {View} from 'react-native';
+import debounce from 'lodash/debounce';
+import isEmpty from 'lodash/isEmpty';
+import type {ForwardedRef, RefObject} from 'react';
+import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import type {GestureResponderEvent} from 'react-native';
+import {ActivityIndicator, Dimensions, View} from 'react-native';
 import {useOnyx} from 'react-native-onyx';
-import type {ValueOf} from 'type-fest';
-import AccountSwitcher from '@components/AccountSwitcher';
-import AccountSwitcherSkeletonView from '@components/AccountSwitcherSkeletonView';
+import AddPaymentMethodMenu from '@components/AddPaymentMethodMenu';
 import ConfirmModal from '@components/ConfirmModal';
-import CustomStatusBarAndBackgroundContext from '@components/CustomStatusBarAndBackground/CustomStatusBarAndBackgroundContext';
+import DelegateNoAccessModal from '@components/DelegateNoAccessModal';
+import FullScreenLoadingIndicator from '@components/FullscreenLoadingIndicator';
+import HeaderWithBackButton from '@components/HeaderWithBackButton';
 import Icon from '@components/Icon';
 import * as Expensicons from '@components/Icon/Expensicons';
+import * as Illustrations from '@components/Icon/Illustrations';
+import KYCWall from '@components/KYCWall';
+import type {PaymentMethodType, Source} from '@components/KYCWall/types';
+import LottieAnimations from '@components/LottieAnimations';
 import MenuItem from '@components/MenuItem';
-import NavigationTabBar from '@components/Navigation/NavigationTabBar';
-import NAVIGATION_TABS from '@components/Navigation/NavigationTabBar/NAVIGATION_TABS';
-import {PressableWithFeedback} from '@components/Pressable';
-import {useProductTrainingContext} from '@components/ProductTrainingContext';
+import MenuItemWithTopDescription from '@components/MenuItemWithTopDescription';
+import OfflineWithFeedback from '@components/OfflineWithFeedback';
+import Popover from '@components/Popover';
 import ScreenWrapper from '@components/ScreenWrapper';
-import {ScrollOffsetContext} from '@components/ScrollOffsetContextProvider';
 import ScrollView from '@components/ScrollView';
+import Section from '@components/Section';
 import Text from '@components/Text';
-import Tooltip from '@components/Tooltip';
-import type {WithCurrentUserPersonalDetailsProps} from '@components/withCurrentUserPersonalDetails';
-import withCurrentUserPersonalDetails from '@components/withCurrentUserPersonalDetails';
 import useLocalize from '@hooks/useLocalize';
 import useNetwork from '@hooks/useNetwork';
+import usePaymentMethodState from '@hooks/usePaymentMethodState';
+import type {FormattedSelectedPaymentMethod, FormattedSelectedPaymentMethodIcon} from '@hooks/usePaymentMethodState/types';
 import useResponsiveLayout from '@hooks/useResponsiveLayout';
-import useScrollEventEmitter from '@hooks/useScrollEventEmitter';
-import useSingleExecution from '@hooks/useSingleExecution';
-import useSubscriptionPlan from '@hooks/useSubscriptionPlan';
 import useTheme from '@hooks/useTheme';
 import useThemeStyles from '@hooks/useThemeStyles';
-import {resetExitSurveyForm} from '@libs/actions/ExitSurvey';
-import {checkIfFeedConnectionIsBroken} from '@libs/CardUtils';
+import useWindowDimensions from '@hooks/useWindowDimensions';
+import {maskCardNumber} from '@libs/CardUtils';
 import {convertToDisplayString} from '@libs/CurrencyUtils';
-import useIsAccountSettingsRouteActive from '@libs/Navigation/helpers/useRouteActive';
+import getClickedTargetLocation from '@libs/getClickedTargetLocation';
 import Navigation from '@libs/Navigation/Navigation';
-import {getFreeTrialText, hasSubscriptionRedDotError} from '@libs/SubscriptionUtils';
-import {getProfilePageBrickRoadIndicator} from '@libs/UserUtils';
-import {hasGlobalWorkspaceSettingsRBR} from '@libs/WorkspacesSettingsUtils';
-import type SETTINGS_TO_RHP from '@navigation/linkingConfig/RELATIONS/SETTINGS_TO_RHP';
-import {showContextMenu} from '@pages/home/report/ContextMenu/ReportActionContextMenu';
+import {formatPaymentMethods, getPaymentMethodDescription} from '@libs/PaymentUtils';
+import {getDescriptionForPolicyDomainCard} from '@libs/PolicyUtils';
+import {buildCannedSearchQuery} from '@libs/SearchQueryUtils';
+import PaymentMethodList from '@pages/settings/Wallet/PaymentMethodList';
 import variables from '@styles/variables';
-import {confirmReadyToOpenApp} from '@userActions/App';
-import {buildOldDotURL, openExternalLink, openOldDotLink} from '@userActions/Link';
-import {hasPaymentMethodError} from '@userActions/PaymentMethods';
-import {isSupportAuthToken, signOutAndRedirectToSignIn} from '@userActions/Session';
-import {openInitialSettingsPage} from '@userActions/Wallet';
-import CONFIG from '@src/CONFIG';
+import {deletePaymentBankAccount, openPersonalBankAccountSetupView, setPersonalBankAccountContinueKYCOnSuccess} from '@userActions/BankAccounts';
+import {close as closeModal} from '@userActions/Modal';
+import {clearWalletError, clearWalletTermsError, deletePaymentCard, makeDefaultPaymentMethod as makeDefaultPaymentMethodPaymentMethods, openWalletPage} from '@userActions/PaymentMethods';
 import CONST from '@src/CONST';
-import type {TranslationPaths} from '@src/languages/types';
 import ONYXKEYS from '@src/ONYXKEYS';
 import ROUTES from '@src/ROUTES';
-import SCREENS from '@src/SCREENS';
-import type {Icon as TIcon} from '@src/types/onyx/OnyxCommon';
-import {isEmptyObject} from '@src/types/utils/EmptyObject';
-import type IconAsset from '@src/types/utils/IconAsset';
+import type {AccountData, Card} from '@src/types/onyx';
 
-type InitialSettingsPageProps = WithCurrentUserPersonalDetailsProps;
-
-type SettingsTopLevelScreens = keyof typeof SETTINGS_TO_RHP;
-
-type MenuData = {
-    translationKey: TranslationPaths;
-    icon: IconAsset;
-    screenName?: SettingsTopLevelScreens;
-    brickRoadIndicator?: ValueOf<typeof CONST.BRICK_ROAD_INDICATOR_STATUS>;
-    action: () => void;
-    link?: string | (() => Promise<string>);
-    iconType?: typeof CONST.ICON_TYPE_ICON | typeof CONST.ICON_TYPE_AVATAR | typeof CONST.ICON_TYPE_WORKSPACE;
-    iconStyles?: StyleProp<ViewStyle>;
-    fallbackIcon?: IconAsset;
-    shouldStackHorizontally?: boolean;
-    avatarSize?: ValueOf<typeof CONST.AVATAR_SIZE>;
-    floatRightAvatars?: TIcon[];
-    title?: string;
-    shouldShowRightIcon?: boolean;
-    iconRight?: IconAsset;
-    badgeText?: string;
-    badgeStyle?: ViewStyle;
-    shouldRenderTooltip?: boolean;
-    renderTooltipContent?: () => React.JSX.Element;
-    onEducationTooltipPress?: () => void;
+type WalletPageProps = {
+    /** Listen for window resize event on web and desktop. */
+    shouldListenForResize?: boolean;
 };
 
-type Menu = {sectionStyle: StyleProp<ViewStyle>; sectionTranslationKey: TranslationPaths; items: MenuData[]};
-
-function InitialSettingsPage({currentUserPersonalDetails}: InitialSettingsPageProps) {
+function WalletPage({shouldListenForResize = false}: WalletPageProps) {
+    const [bankAccountList] = useOnyx(ONYXKEYS.BANK_ACCOUNT_LIST, {initialValue: {}, canBeMissing: true});
+    const [cardList] = useOnyx(ONYXKEYS.CARD_LIST, {initialValue: {}, canBeMissing: true});
+    const [fundList] = useOnyx(ONYXKEYS.FUND_LIST, {initialValue: {}, canBeMissing: true});
+    const [isLoadingPaymentMethods] = useOnyx(ONYXKEYS.IS_LOADING_PAYMENT_METHODS, {initialValue: true, canBeMissing: true});
     const [userWallet] = useOnyx(ONYXKEYS.USER_WALLET, {canBeMissing: true});
-    const [bankAccountList] = useOnyx(ONYXKEYS.BANK_ACCOUNT_LIST, {canBeMissing: true});
-    const [fundList] = useOnyx(ONYXKEYS.FUND_LIST, {canBeMissing: true});
-    const [walletTerms] = useOnyx(ONYXKEYS.WALLET_TERMS, {canBeMissing: true});
-    const [loginList] = useOnyx(ONYXKEYS.LOGIN_LIST, {canBeMissing: true});
-    const [policies] = useOnyx(ONYXKEYS.COLLECTION.POLICY, {canBeMissing: true});
-    const [privatePersonalDetails] = useOnyx(ONYXKEYS.PRIVATE_PERSONAL_DETAILS, {canBeMissing: true});
-    const [tryNewDot] = useOnyx(ONYXKEYS.NVP_TRY_NEW_DOT, {canBeMissing: true});
-    const [allCards] = useOnyx(ONYXKEYS.CARD_LIST, {canBeMissing: true});
+    const [walletTerms] = useOnyx(ONYXKEYS.WALLET_TERMS, {initialValue: {}, canBeMissing: true});
+    const [isLoadingApp] = useOnyx(ONYXKEYS.IS_LOADING_APP, {canBeMissing: false});
+    const [userAccount] = useOnyx(ONYXKEYS.ACCOUNT, {canBeMissing: true});
+    const isUserValidated = userAccount?.validated ?? false;
+    const isActingAsDelegate = !!userAccount?.delegatedAccess?.delegate || false;
 
-    const {shouldUseNarrowLayout} = useResponsiveLayout();
-    const network = useNetwork();
+    const [isNoDelegateAccessMenuVisible, setIsNoDelegateAccessMenuVisible] = useState(false);
+
     const theme = useTheme();
     const styles = useThemeStyles();
-    const {isExecuting, singleExecution} = useSingleExecution();
-    const popoverAnchor = useRef(null);
     const {translate} = useLocalize();
-    const focusedRouteName = useNavigationState((state) => findFocusedRoute(state)?.name);
-    const emojiCode = currentUserPersonalDetails?.status?.emojiCode ?? '';
-    const [allConnectionSyncProgresses] = useOnyx(`${ONYXKEYS.COLLECTION.POLICY_CONNECTION_SYNC_PROGRESS}`, {canBeMissing: true});
-    const {setRootStatusBarEnabled} = useContext(CustomStatusBarAndBackgroundContext);
+    const network = useNetwork();
+    const {windowWidth} = useWindowDimensions();
+    const {shouldUseNarrowLayout} = useResponsiveLayout();
+    const {paymentMethod, setPaymentMethod, resetSelectedPaymentMethodData} = usePaymentMethodState();
+    const [shouldShowAddPaymentMenu, setShouldShowAddPaymentMenu] = useState(false);
+    const [shouldShowDefaultDeleteMenu, setShouldShowDefaultDeleteMenu] = useState(false);
+    const [shouldShowCardMenu, setShouldShowCardMenu] = useState(false);
+    const [shouldShowLoadingSpinner, setShouldShowLoadingSpinner] = useState(false);
+    const addPaymentMethodAnchorRef = useRef(null);
+    const paymentMethodButtonRef = useRef<HTMLDivElement | null>(null);
+    const [anchorPosition, setAnchorPosition] = useState({
+        anchorPositionHorizontal: 0,
+        anchorPositionVertical: 0,
+        anchorPositionTop: 0,
+        anchorPositionRight: 0,
+    });
+    const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false);
 
-    const isScreenFocused = useIsAccountSettingsRouteActive(shouldUseNarrowLayout);
-    const isWorkspacesTabSelected = focusedRouteName === SCREENS.SETTINGS.WORKSPACES;
+    const hasWallet = !isEmpty(userWallet);
+    const hasActivatedWallet = ([CONST.WALLET.TIER_NAME.GOLD, CONST.WALLET.TIER_NAME.PLATINUM] as string[]).includes(userWallet?.tierName ?? '');
+    const hasAssignedCard = !isEmpty(cardList);
 
-    const {
-        renderProductTrainingTooltip: renderWorkspaceSettingsTooltip,
-        shouldShowProductTrainingTooltip: shouldShowWorkspaceSettingsTooltip,
-        hideProductTrainingTooltip: hideWorkspaceSettingsTooltip,
-    } = useProductTrainingContext(CONST.PRODUCT_TRAINING_TOOLTIP_NAMES.WORKSPACES_SETTINGS, isScreenFocused && !isWorkspacesTabSelected);
+    const isPendingOnfidoResult = userWallet?.isPendingOnfidoResult ?? false;
+    const hasFailedOnfido = userWallet?.hasFailedOnfido ?? false;
 
-    // Controls the visibility of the educational tooltip based on user scrolling.
-    // Hides the tooltip when the user is scrolling and displays it once scrolling stops.
-    const triggerScrollEvent = useScrollEventEmitter();
-
-    const shouldDisplayLHB = !shouldUseNarrowLayout;
-
-    const [privateSubscription] = useOnyx(ONYXKEYS.NVP_PRIVATE_SUBSCRIPTION, {canBeMissing: true});
-    const subscriptionPlan = useSubscriptionPlan();
-    const hasBrokenFeedConnection = checkIfFeedConnectionIsBroken(allCards, CONST.EXPENSIFY_CARD.BANK);
-    const walletBrickRoadIndicator =
-        hasPaymentMethodError(bankAccountList, fundList) || !isEmptyObject(userWallet?.errors) || !isEmptyObject(walletTerms?.errors) || hasBrokenFeedConnection ? 'error' : undefined;
-
-    const [shouldShowSignoutConfirmModal, setShouldShowSignoutConfirmModal] = useState(false);
-
-    const freeTrialText = getFreeTrialText(policies);
-    const shouldOpenSurveyReasonPage = tryNewDot?.classicRedirect?.dismissed === false;
-
-    useEffect(() => {
-        openInitialSettingsPage();
-        confirmReadyToOpenApp();
-    }, []);
-
-    const toggleSignoutConfirmModal = (value: boolean) => {
-        setShouldShowSignoutConfirmModal(value);
-    };
-
-    const signOut = useCallback(
-        (shouldForceSignout = false) => {
-            if (!network.isOffline || shouldForceSignout) {
-                signOutAndRedirectToSignIn();
-                return;
-            }
-
-            // When offline, warn the user that any actions they took while offline will be lost if they sign out
-            toggleSignoutConfirmModal(true);
-        },
-        [network.isOffline],
-    );
-
-    /**
-     * Retuns a list of menu items data for account section
-     * @returns object with translationKey, style and items for the account section
-     */
-    const accountMenuItemsData: Menu = useMemo(() => {
-        const profileBrickRoadIndicator = getProfilePageBrickRoadIndicator(loginList, privatePersonalDetails);
-        const defaultMenu: Menu = {
-            sectionStyle: styles.accountSettingsSectionContainer,
-            sectionTranslationKey: 'initialSettingsPage.account',
-            items: [
-                {
-                    translationKey: 'common.profile',
-                    icon: Expensicons.Profile,
-                    screenName: SCREENS.SETTINGS.PROFILE.ROOT,
-                    brickRoadIndicator: profileBrickRoadIndicator,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_PROFILE.getRoute()),
-                },
-                {
-                    translationKey: 'common.wallet',
-                    icon: Expensicons.Wallet,
-                    screenName: SCREENS.SETTINGS.WALLET.ROOT,
-                    brickRoadIndicator: walletBrickRoadIndicator,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_WALLET),
-                },
-                {
-                    translationKey: 'common.preferences',
-                    icon: Expensicons.Gear,
-                    screenName: SCREENS.SETTINGS.PREFERENCES.ROOT,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_PREFERENCES),
-                },
-                {
-                    translationKey: 'initialSettingsPage.security',
-                    icon: Expensicons.Lock,
-                    screenName: SCREENS.SETTINGS.SECURITY,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_SECURITY),
-                },
-            ],
-        };
-
-        return defaultMenu;
-    }, [loginList, privatePersonalDetails, styles.accountSettingsSectionContainer, walletBrickRoadIndicator]);
-
-    const navigateToWorkspacesSettings = useCallback(() => {
-        hideWorkspaceSettingsTooltip();
-        Navigation.navigate(ROUTES.SETTINGS_WORKSPACES.route);
-    }, [hideWorkspaceSettingsTooltip]);
-
-    /**
-     * Retuns a list of menu items data for workspace section
-     * @returns object with translationKey, style and items for the workspace section
-     */
-    const workspaceMenuItemsData: Menu = useMemo(() => {
-        const items: MenuData[] = [
-            {
-                translationKey: 'common.workspaces',
-                icon: Expensicons.Buildings,
-                screenName: SCREENS.SETTINGS.WORKSPACES,
-                brickRoadIndicator: hasGlobalWorkspaceSettingsRBR(policies, allConnectionSyncProgresses) ? CONST.BRICK_ROAD_INDICATOR_STATUS.ERROR : undefined,
-                action: navigateToWorkspacesSettings,
-                shouldRenderTooltip: shouldShowWorkspaceSettingsTooltip,
-                renderTooltipContent: renderWorkspaceSettingsTooltip,
-                onEducationTooltipPress: navigateToWorkspacesSettings,
-            },
-            {
-                translationKey: 'allSettingsScreen.domains',
-                icon: Expensicons.Globe,
-                shouldShowRightIcon: true,
-                iconRight: Expensicons.NewWindow,
-                link: () => buildOldDotURL(CONST.OLDDOT_URLS.ADMIN_DOMAINS_URL),
-                action: () => {
-                    openOldDotLink(CONST.OLDDOT_URLS.ADMIN_DOMAINS_URL);
-                },
-            },
-        ];
-
-        if (subscriptionPlan) {
-            items.splice(1, 0, {
-                translationKey: 'allSettingsScreen.subscription',
-                icon: Expensicons.CreditCard,
-                screenName: SCREENS.SETTINGS.SUBSCRIPTION.ROOT,
-                brickRoadIndicator: !!privateSubscription?.errors || hasSubscriptionRedDotError() ? CONST.BRICK_ROAD_INDICATOR_STATUS.ERROR : undefined,
-                badgeText: freeTrialText,
-                badgeStyle: freeTrialText ? styles.badgeSuccess : undefined,
-                action: () => Navigation.navigate(ROUTES.SETTINGS_SUBSCRIPTION.route),
-            });
+    const updateShouldShowLoadingSpinner = useCallback(() => {
+        // In order to prevent a loop, only update state of the spinner if there is a change
+        const showLoadingSpinner = isLoadingPaymentMethods ?? false;
+        if (showLoadingSpinner !== shouldShowLoadingSpinner) {
+            setShouldShowLoadingSpinner(showLoadingSpinner && !network.isOffline);
         }
+    }, [isLoadingPaymentMethods, network.isOffline, shouldShowLoadingSpinner]);
 
-        return {
-            sectionStyle: styles.workspaceSettingsSectionContainer,
-            sectionTranslationKey: 'common.workspaces',
-            items,
-        };
-    }, [
-        allConnectionSyncProgresses,
-        freeTrialText,
-        policies,
-        privateSubscription?.errors,
-        styles.badgeSuccess,
-        styles.workspaceSettingsSectionContainer,
-        subscriptionPlan,
-        navigateToWorkspacesSettings,
-        renderWorkspaceSettingsTooltip,
-        shouldShowWorkspaceSettingsTooltip,
-    ]);
+    const debounceSetShouldShowLoadingSpinner = debounce(updateShouldShowLoadingSpinner, CONST.TIMING.SHOW_LOADING_SPINNER_DEBOUNCE_TIME);
 
     /**
-     * Retuns a list of menu items data for general section
-     * @returns object with translationKey, style and items for the general section
+     * Set position of the payment menu
      */
-    const generalMenuItemsData: Menu = useMemo(() => {
-        const signOutTranslationKey = isSupportAuthToken() ? 'initialSettingsPage.restoreStashed' : 'initialSettingsPage.signOut';
-        return {
-            sectionStyle: {
-                ...styles.pt4,
-            },
-            sectionTranslationKey: 'initialSettingsPage.general',
-            items: [
-                {
-                    translationKey: 'initialSettingsPage.help',
-                    icon: Expensicons.QuestionMark,
-                    iconRight: Expensicons.NewWindow,
-                    shouldShowRightIcon: true,
-                    link: CONST.NEWHELP_URL,
-                    action: () => {
-                        openExternalLink(CONST.NEWHELP_URL);
-                    },
-                },
-                {
-                    translationKey: 'exitSurvey.goToExpensifyClassic',
-                    icon: Expensicons.ExpensifyLogoNew,
-                    ...(CONFIG.IS_HYBRID_APP
-                        ? {
-                              action: () => {
-                                  HybridAppModule.closeReactNativeApp({shouldSignOut: false, shouldSetNVP: true});
-                                  setRootStatusBarEnabled(false);
-                              },
-                          }
-                        : {
-                              action() {
-                                  resetExitSurveyForm(() => {
-                                      if (shouldOpenSurveyReasonPage) {
-                                          Navigation.navigate(ROUTES.SETTINGS_EXIT_SURVEY_REASON.route);
-                                          return;
-                                      }
-                                      Navigation.navigate(ROUTES.SETTINGS_EXIT_SURVEY_CONFIRM.route);
-                                  });
-                              },
-                          }),
-                },
-                {
-                    translationKey: 'initialSettingsPage.about',
-                    icon: Expensicons.Info,
-                    screenName: SCREENS.SETTINGS.ABOUT,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_ABOUT),
-                },
-                {
-                    translationKey: 'initialSettingsPage.aboutPage.troubleshoot',
-                    icon: Expensicons.Lightbulb,
-                    screenName: SCREENS.SETTINGS.TROUBLESHOOT,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_TROUBLESHOOT),
-                },
-                {
-                    translationKey: 'sidebarScreen.saveTheWorld',
-                    icon: Expensicons.Heart,
-                    screenName: SCREENS.SETTINGS.SAVE_THE_WORLD,
-                    action: () => Navigation.navigate(ROUTES.SETTINGS_SAVE_THE_WORLD),
-                },
-                {
-                    translationKey: signOutTranslationKey,
-                    icon: Expensicons.Exit,
-                    action: () => {
-                        signOut(false);
-                    },
-                },
-            ],
-        };
-    }, [styles.pt4, setRootStatusBarEnabled, shouldOpenSurveyReasonPage, signOut]);
-
-    /**
-     * Retuns JSX.Element with menu items
-     * @param menuItemsData list with menu items data
-     * @returns the menu items for passed data
-     */
-    const getMenuItemsSection = useCallback(
-        (menuItemsData: Menu) => {
-            /**
-             * @param isPaymentItem whether the item being rendered is the payments menu item
-             * @returns the user's wallet balance
-             */
-            const getWalletBalance = (isPaymentItem: boolean): string | undefined => (isPaymentItem ? convertToDisplayString(userWallet?.currentBalance) : undefined);
-
-            const openPopover = (link: string | (() => Promise<string>) | undefined, event: GestureResponderEvent | MouseEvent) => {
-                if (!Navigation.getActiveRoute().includes(ROUTES.SETTINGS)) {
-                    return;
-                }
-
-                if (typeof link === 'function') {
-                    link?.()?.then((url) =>
-                        showContextMenu({
-                            type: CONST.CONTEXT_MENU_TYPES.LINK,
-                            event,
-                            selection: url,
-                            contextMenuAnchor: popoverAnchor.current,
-                        }),
-                    );
-                } else if (link) {
-                    showContextMenu({
-                        type: CONST.CONTEXT_MENU_TYPES.LINK,
-                        event,
-                        selection: link,
-                        contextMenuAnchor: popoverAnchor.current,
-                    });
-                }
-            };
-
-            return (
-                <View style={[menuItemsData.sectionStyle, styles.pb4, styles.mh3]}>
-                    <Text style={styles.sectionTitle}>{translate(menuItemsData.sectionTranslationKey)}</Text>
-                    {menuItemsData.items.map((item) => {
-                        const keyTitle = item.translationKey ? translate(item.translationKey) : item.title;
-                        const isPaymentItem = item.translationKey === 'common.wallet';
-                        const isFocused = focusedRouteName ? focusedRouteName === item.screenName : false;
-
-                        return (
-                            <MenuItem
-                                key={keyTitle}
-                                wrapperStyle={styles.sectionMenuItem}
-                                title={keyTitle}
-                                icon={item.icon}
-                                iconType={item.iconType}
-                                disabled={isExecuting}
-                                onPress={singleExecution(() => {
-                                    item.action();
-                                })}
-                                iconStyles={item.iconStyles}
-                                badgeText={item.badgeText ?? getWalletBalance(isPaymentItem)}
-                                badgeStyle={item.badgeStyle}
-                                fallbackIcon={item.fallbackIcon}
-                                brickRoadIndicator={item.brickRoadIndicator}
-                                floatRightAvatars={item.floatRightAvatars}
-                                shouldStackHorizontally={item.shouldStackHorizontally}
-                                floatRightAvatarSize={item.avatarSize}
-                                ref={popoverAnchor}
-                                shouldBlockSelection={!!item.link}
-                                onSecondaryInteraction={item.link ? (event) => openPopover(item.link, event) : undefined}
-                                focused={isFocused}
-                                isPaneMenu
-                                iconRight={item.iconRight}
-                                shouldShowRightIcon={item.shouldShowRightIcon}
-                                shouldIconUseAutoWidthStyle
-                                shouldRenderTooltip={item.shouldRenderTooltip}
-                                renderTooltipContent={item.renderTooltipContent}
-                                onEducationTooltipPress={item.onEducationTooltipPress}
-                                tooltipAnchorAlignment={{
-                                    horizontal: CONST.MODAL.ANCHOR_ORIGIN_HORIZONTAL.LEFT,
-                                    vertical: CONST.MODAL.ANCHOR_ORIGIN_VERTICAL.TOP,
-                                }}
-                                tooltipShiftHorizontal={variables.workspacesSettingsTooltipShiftHorizontal}
-                                tooltipShiftVertical={variables.workspacesSettingsTooltipShiftVertical}
-                                tooltipWrapperStyle={styles.productTrainingTooltipWrapper}
-                                shouldHideOnScroll
-                            />
-                        );
-                    })}
-                </View>
-            );
-        },
-        [
-            styles.pb4,
-            styles.mh3,
-            styles.sectionTitle,
-            styles.sectionMenuItem,
-            translate,
-            userWallet?.currentBalance,
-            focusedRouteName,
-            isExecuting,
-            singleExecution,
-            styles.productTrainingTooltipWrapper,
-        ],
-    );
-
-    const accountMenuItems = useMemo(() => getMenuItemsSection(accountMenuItemsData), [accountMenuItemsData, getMenuItemsSection]);
-    const generalMenuItems = useMemo(() => getMenuItemsSection(generalMenuItemsData), [generalMenuItemsData, getMenuItemsSection]);
-    const workspaceMenuItems = useMemo(() => getMenuItemsSection(workspaceMenuItemsData), [workspaceMenuItemsData, getMenuItemsSection]);
-
-    const headerContent = (
-        <View style={[styles.ph5, styles.pv4]}>
-            {isEmptyObject(currentUserPersonalDetails) || currentUserPersonalDetails.displayName === undefined ? (
-                <AccountSwitcherSkeletonView avatarSize={CONST.AVATAR_SIZE.DEFAULT} />
-            ) : (
-                <View style={[styles.flexRow, styles.justifyContentBetween, styles.alignItemsCenter, styles.gap3]}>
-                    <AccountSwitcher isScreenFocused={isScreenFocused} />
-                    <Tooltip text={translate('statusPage.status')}>
-                        <PressableWithFeedback
-                            accessibilityLabel={translate('statusPage.status')}
-                            accessibilityRole="button"
-                            accessible
-                            onPress={() => Navigation.navigate(ROUTES.SETTINGS_STATUS)}
-                        >
-                            <View style={styles.primaryMediumIcon}>
-                                {emojiCode ? (
-                                    <Text style={styles.primaryMediumText}>{emojiCode}</Text>
-                                ) : (
-                                    <Icon
-                                        src={Expensicons.Emoji}
-                                        width={variables.iconSizeNormal}
-                                        height={variables.iconSizeNormal}
-                                        fill={theme.icon}
-                                    />
-                                )}
-                            </View>
-                        </PressableWithFeedback>
-                    </Tooltip>
-                </View>
-            )}
-        </View>
-    );
-
-    const {saveScrollOffset, getScrollOffset} = useContext(ScrollOffsetContext);
-    const route = useRoute();
-    const scrollViewRef = useRef<RNScrollView>(null);
-
-    const onScroll = useCallback<NonNullable<ScrollViewProps['onScroll']>>(
-        (e) => {
-            // If the layout measurement is 0, it means the flashlist is not displayed but the onScroll may be triggered with offset value 0.
-            // We should ignore this case.
-            if (e.nativeEvent.layoutMeasurement.height === 0) {
-                return;
-            }
-            saveScrollOffset(route, e.nativeEvent.contentOffset.y);
-            triggerScrollEvent();
-        },
-        [route, saveScrollOffset, triggerScrollEvent],
-    );
-
-    useLayoutEffect(() => {
-        const scrollOffset = getScrollOffset(route);
-        if (!scrollOffset || !scrollViewRef.current) {
+    const setMenuPosition = useCallback(() => {
+        if (!paymentMethodButtonRef.current) {
             return;
         }
-        scrollViewRef.current.scrollTo({y: scrollOffset, animated: false});
-    }, [getScrollOffset, route]);
+
+        const position = getClickedTargetLocation(paymentMethodButtonRef.current);
+
+        setAnchorPosition({
+            anchorPositionTop: position.top + position.height - variables.bankAccountActionPopoverTopSpacing,
+            // We want the position to be 23px to the right of the left border
+            anchorPositionRight: windowWidth - position.right + variables.bankAccountActionPopoverRightSpacing,
+            anchorPositionHorizontal: position.x + variables.addBankAccountLeftSpacing,
+            anchorPositionVertical: position.y,
+        });
+    }, [windowWidth]);
+
+    const getSelectedPaymentMethodID = useCallback(() => {
+        if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT) {
+            return paymentMethod.selectedPaymentMethod.bankAccountID;
+        }
+        if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.DEBIT_CARD) {
+            return paymentMethod.selectedPaymentMethod.fundID;
+        }
+    }, [paymentMethod.selectedPaymentMethod.bankAccountID, paymentMethod.selectedPaymentMethod.fundID, paymentMethod.selectedPaymentMethodType]);
+
+    /**
+     * Display the delete/default menu, or the add payment method menu
+     */
+    const paymentMethodPressed = (
+        nativeEvent?: GestureResponderEvent | KeyboardEvent,
+        accountType?: string,
+        account?: AccountData,
+        icon?: FormattedSelectedPaymentMethodIcon,
+        isDefault?: boolean,
+        methodID?: string | number,
+        description?: string,
+    ) => {
+        if (shouldShowAddPaymentMenu) {
+            setShouldShowAddPaymentMenu(false);
+            return;
+        }
+
+        if (shouldShowDefaultDeleteMenu) {
+            setShouldShowDefaultDeleteMenu(false);
+            return;
+        }
+        paymentMethodButtonRef.current = nativeEvent?.currentTarget as HTMLDivElement;
+
+        // The delete/default menu
+        if (accountType) {
+            let formattedSelectedPaymentMethod: FormattedSelectedPaymentMethod = {
+                title: '',
+            };
+            if (accountType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT) {
+                formattedSelectedPaymentMethod = {
+                    title: account?.addressName ?? '',
+                    icon,
+                    description: description ?? getPaymentMethodDescription(accountType, account),
+                    type: CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT,
+                };
+            } else if (accountType === CONST.PAYMENT_METHODS.DEBIT_CARD) {
+                formattedSelectedPaymentMethod = {
+                    title: account?.addressName ?? '',
+                    icon,
+                    description: description ?? getPaymentMethodDescription(accountType, account),
+                    type: CONST.PAYMENT_METHODS.DEBIT_CARD,
+                };
+            }
+            setPaymentMethod({
+                isSelectedPaymentMethodDefault: !!isDefault,
+                selectedPaymentMethod: account ?? {},
+                selectedPaymentMethodType: accountType,
+                formattedSelectedPaymentMethod,
+                methodID: methodID ?? CONST.DEFAULT_NUMBER_ID,
+            });
+            setShouldShowDefaultDeleteMenu(true);
+            setMenuPosition();
+            return;
+        }
+        if (isActingAsDelegate) {
+            setIsNoDelegateAccessMenuVisible(true);
+            return;
+        }
+        setShouldShowAddPaymentMenu(true);
+        setMenuPosition();
+    };
+
+    const assignedCardPressed = (nativeEvent?: GestureResponderEvent | KeyboardEvent, cardData?: Card, icon?: FormattedSelectedPaymentMethodIcon, cardID?: number) => {
+        if (shouldShowAddPaymentMenu) {
+            setShouldShowAddPaymentMenu(false);
+            return;
+        }
+        if (shouldShowDefaultDeleteMenu) {
+            setShouldShowDefaultDeleteMenu(false);
+            return;
+        }
+
+        if (shouldShowCardMenu) {
+            setShouldShowCardMenu(false);
+            return;
+        }
+        paymentMethodButtonRef.current = nativeEvent?.currentTarget as HTMLDivElement;
+        setPaymentMethod({
+            isSelectedPaymentMethodDefault: false,
+            selectedPaymentMethod: {},
+            formattedSelectedPaymentMethod: {
+                title: maskCardNumber(cardData?.cardName, cardData?.bank),
+                description: cardData ? getDescriptionForPolicyDomainCard(cardData.domainName) : '',
+                icon,
+            },
+            selectedPaymentMethodType: '',
+            methodID: cardID ?? CONST.DEFAULT_NUMBER_ID,
+        });
+        setShouldShowCardMenu(true);
+        setMenuPosition();
+    };
+
+    /**
+     * Hide the add payment modal
+     */
+    const hideAddPaymentMenu = () => {
+        setShouldShowAddPaymentMenu(false);
+    };
+
+    /**
+     * Navigate to the appropriate payment type addition screen
+     */
+    const addPaymentMethodTypePressed = (paymentType: string) => {
+        hideAddPaymentMenu();
+
+        if (paymentType === CONST.PAYMENT_METHODS.DEBIT_CARD) {
+            Navigation.navigate(ROUTES.SETTINGS_ADD_DEBIT_CARD);
+            return;
+        }
+        if (paymentType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT || paymentType === CONST.PAYMENT_METHODS.BUSINESS_BANK_ACCOUNT) {
+            openPersonalBankAccountSetupView();
+            return;
+        }
+
+        throw new Error('Invalid payment method type selected');
+    };
+
+    /**
+     * Hide the default / delete modal
+     */
+    const hideDefaultDeleteMenu = useCallback(() => {
+        setShouldShowDefaultDeleteMenu(false);
+        setShowConfirmDeleteModal(false);
+    }, [setShouldShowDefaultDeleteMenu, setShowConfirmDeleteModal]);
+
+    const hideCardMenu = useCallback(() => {
+        setShouldShowCardMenu(false);
+    }, [setShouldShowCardMenu]);
+
+    const makeDefaultPaymentMethod = useCallback(() => {
+        const paymentCardList = fundList ?? {};
+        // Find the previous default payment method so we can revert if the MakeDefaultPaymentMethod command errors
+        const paymentMethods = formatPaymentMethods(bankAccountList ?? {}, paymentCardList, styles);
+
+        const previousPaymentMethod = paymentMethods.find((method) => !!method.isDefault);
+        const currentPaymentMethod = paymentMethods.find((method) => method.methodID === paymentMethod.methodID);
+        if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT) {
+            makeDefaultPaymentMethodPaymentMethods(paymentMethod.selectedPaymentMethod.bankAccountID ?? CONST.DEFAULT_NUMBER_ID, 0, previousPaymentMethod, currentPaymentMethod);
+        } else if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.DEBIT_CARD) {
+            makeDefaultPaymentMethodPaymentMethods(0, paymentMethod.selectedPaymentMethod.fundID ?? CONST.DEFAULT_NUMBER_ID, previousPaymentMethod, currentPaymentMethod);
+        }
+    }, [
+        paymentMethod.methodID,
+        paymentMethod.selectedPaymentMethod.bankAccountID,
+        paymentMethod.selectedPaymentMethod.fundID,
+        paymentMethod.selectedPaymentMethodType,
+        bankAccountList,
+        fundList,
+        styles,
+    ]);
+
+    const deletePaymentMethod = useCallback(() => {
+        const bankAccountID = paymentMethod.selectedPaymentMethod.bankAccountID;
+        const fundID = paymentMethod.selectedPaymentMethod.fundID;
+        if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT && bankAccountID) {
+            deletePaymentBankAccount(bankAccountID);
+        } else if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.DEBIT_CARD && fundID) {
+            deletePaymentCard(fundID);
+        }
+    }, [paymentMethod.selectedPaymentMethod.bankAccountID, paymentMethod.selectedPaymentMethod.fundID, paymentMethod.selectedPaymentMethodType]);
+
+    /**
+     * Navigate to the appropriate page after completing the KYC flow, depending on what initiated it
+     */
+    const navigateToWalletOrTransferBalancePage = (source?: Source) => {
+        Navigation.navigate(source === CONST.KYC_WALL_SOURCE.ENABLE_WALLET ? ROUTES.SETTINGS_WALLET : ROUTES.SETTINGS_WALLET_TRANSFER_BALANCE);
+    };
+
+    useEffect(() => {
+        // If the user was previously offline, skip debouncing showing the loader
+        if (!network.isOffline) {
+            updateShouldShowLoadingSpinner();
+        } else {
+            debounceSetShouldShowLoadingSpinner();
+        }
+    }, [network.isOffline, debounceSetShouldShowLoadingSpinner, updateShouldShowLoadingSpinner]);
+
+    useEffect(() => {
+        if (network.isOffline) {
+            return;
+        }
+        openWalletPage();
+    }, [network.isOffline]);
+
+    useLayoutEffect(() => {
+        if (!shouldListenForResize) {
+            return;
+        }
+        const popoverPositionListener = Dimensions.addEventListener('change', () => {
+            if (!shouldShowAddPaymentMenu && !shouldShowDefaultDeleteMenu && !shouldShowCardMenu) {
+                return;
+            }
+            if (shouldShowAddPaymentMenu) {
+                debounce(setMenuPosition, CONST.TIMING.RESIZE_DEBOUNCE_TIME)();
+                return;
+            }
+            setMenuPosition();
+        });
+        return () => {
+            if (!popoverPositionListener) {
+                return;
+            }
+            popoverPositionListener.remove();
+        };
+    }, [shouldShowAddPaymentMenu, shouldShowDefaultDeleteMenu, shouldShowCardMenu, setMenuPosition, shouldListenForResize]);
+
+    useEffect(() => {
+        if (!shouldShowDefaultDeleteMenu) {
+            return;
+        }
+
+        // We should reset selected payment method state values and close corresponding modals if the selected payment method is deleted
+        let shouldResetPaymentMethodData = false;
+
+        if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT && isEmpty(bankAccountList?.[paymentMethod.methodID])) {
+            shouldResetPaymentMethodData = true;
+        } else if (paymentMethod.selectedPaymentMethodType === CONST.PAYMENT_METHODS.DEBIT_CARD && isEmpty(fundList?.[paymentMethod.methodID])) {
+            shouldResetPaymentMethodData = true;
+        }
+        if (shouldResetPaymentMethodData) {
+            // Close corresponding selected payment method modals which are open
+            if (shouldShowDefaultDeleteMenu) {
+                hideDefaultDeleteMenu();
+            }
+        }
+    }, [hideDefaultDeleteMenu, paymentMethod.methodID, paymentMethod.selectedPaymentMethodType, bankAccountList, fundList, shouldShowDefaultDeleteMenu]);
+    // Don't show "Make default payment method" button if it's the only payment method or if it's already the default
+    const isCurrentPaymentMethodDefault = () => {
+        const hasMultiplePaymentMethods = formatPaymentMethods(bankAccountList ?? {}, fundList ?? {}, styles).length > 1;
+        if (hasMultiplePaymentMethods) {
+            if (paymentMethod.formattedSelectedPaymentMethod.type === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT) {
+                return paymentMethod.selectedPaymentMethod.bankAccountID === userWallet?.walletLinkedAccountID;
+            }
+            if (paymentMethod.formattedSelectedPaymentMethod.type === CONST.PAYMENT_METHODS.DEBIT_CARD) {
+                return paymentMethod.selectedPaymentMethod.fundID === userWallet?.walletLinkedAccountID;
+            }
+        }
+        return true;
+    };
+
+    const shouldShowMakeDefaultButton =
+        !isCurrentPaymentMethodDefault() &&
+        !(paymentMethod.formattedSelectedPaymentMethod.type === CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT && paymentMethod.selectedPaymentMethod.type === CONST.BANK_ACCOUNT.TYPE.BUSINESS);
+
+    // Determines whether or not the modal popup is mounted from the bottom of the screen instead of the side mount on Web or Desktop screens
+    const isPopoverBottomMount = anchorPosition.anchorPositionTop === 0 || shouldUseNarrowLayout;
+    const alertTextStyle = [styles.inlineSystemMessage, styles.flexShrink1];
+    const alertViewStyle = [styles.flexRow, styles.alignItemsCenter, styles.w100];
+    const headerWithBackButton = (
+        <HeaderWithBackButton
+            title={translate('common.wallet')}
+            icon={Illustrations.MoneyIntoWallet}
+            shouldUseHeadlineHeader
+            shouldShowBackButton={shouldUseNarrowLayout}
+            shouldDisplaySearchRouter
+            onBackButtonPress={() => Navigation.goBack(undefined, {shouldPopToTop: true})}
+        />
+    );
+
+    if (isLoadingApp) {
+        return (
+            <ScreenWrapper
+                testID={WalletPage.displayName}
+                shouldShowOfflineIndicatorInWideScreen
+            >
+                {headerWithBackButton}
+                <View style={styles.flex1}>
+                    <FullScreenLoadingIndicator />
+                </View>
+            </ScreenWrapper>
+        );
+    }
 
     return (
-        <ScreenWrapper
-            includeSafeAreaPaddingBottom
-            testID={InitialSettingsPage.displayName}
-            bottomContent={!shouldDisplayLHB && <NavigationTabBar selectedTab={NAVIGATION_TABS.SETTINGS} />}
-            shouldEnableKeyboardAvoidingView={false}
-        >
-            {headerContent}
-            <ScrollView
-                ref={scrollViewRef}
-                onScroll={onScroll}
-                scrollEventThrottle={16}
-                contentContainerStyle={[styles.w100]}
-                showsVerticalScrollIndicator={false}
+        <>
+            <ScreenWrapper
+                testID={WalletPage.displayName}
+                shouldShowOfflineIndicatorInWideScreen
             >
-                {accountMenuItems}
-                {workspaceMenuItems}
-                {generalMenuItems}
+                {headerWithBackButton}
+                <ScrollView style={styles.pt3}>
+                    <View style={[styles.flex1, shouldUseNarrowLayout ? styles.workspaceSectionMobile : styles.workspaceSection]}>
+                        <OfflineWithFeedback
+                            style={styles.flex1}
+                            contentContainerStyle={styles.flex1}
+                            onClose={clearWalletError}
+                            errors={userWallet?.errors}
+                            errorRowStyles={[styles.ph6]}
+                        >
+                            <Section
+                                subtitle={translate('walletPage.addBankAccountToSendAndReceive')}
+                                title={translate('common.bankAccounts')}
+                                isCentralPane
+                                subtitleMuted
+                                titleStyles={styles.accountSettingsSectionTitle}
+                                illustration={LottieAnimations.BankVault}
+                                illustrationStyle={styles.walletIllustration}
+                                illustrationContainerStyle={{height: 220}}
+                                illustrationBackgroundColor="#411103"
+                            >
+                                <PaymentMethodList
+                                    shouldShowAddPaymentMethodButton={false}
+                                    shouldShowEmptyListMessage={false}
+                                    onPress={paymentMethodPressed}
+                                    actionPaymentMethodType={shouldShowDefaultDeleteMenu ? paymentMethod.selectedPaymentMethodType : ''}
+                                    activePaymentMethodID={shouldShowDefaultDeleteMenu ? getSelectedPaymentMethodID() : ''}
+                                    buttonRef={addPaymentMethodAnchorRef}
+                                    onListContentSizeChange={shouldShowAddPaymentMenu || shouldShowDefaultDeleteMenu ? setMenuPosition : () => {}}
+                                    shouldEnableScroll={false}
+                                    style={[styles.mt5, [shouldUseNarrowLayout ? styles.mhn5 : styles.mhn8]]}
+                                    listItemStyle={shouldUseNarrowLayout ? styles.ph5 : styles.ph8}
+                                />
+                            </Section>
+
+                            {hasAssignedCard ? (
+                                <Section
+                                    subtitle={translate('walletPage.assignedCardsDescription')}
+                                    title={translate('walletPage.assignedCards')}
+                                    isCentralPane
+                                    subtitleMuted
+                                    titleStyles={styles.accountSettingsSectionTitle}
+                                >
+                                    <PaymentMethodList
+                                        shouldShowAddBankAccount={false}
+                                        shouldShowAddPaymentMethodButton={false}
+                                        shouldShowAssignedCards
+                                        shouldShowEmptyListMessage={false}
+                                        shouldEnableScroll={false}
+                                        onPress={assignedCardPressed}
+                                        style={[styles.mt5, [shouldUseNarrowLayout ? styles.mhn5 : styles.mhn8]]}
+                                        listItemStyle={shouldUseNarrowLayout ? styles.ph5 : styles.ph8}
+                                        actionPaymentMethodType={shouldShowCardMenu ? paymentMethod.selectedPaymentMethodType : ''}
+                                        activePaymentMethodID={shouldShowCardMenu ? paymentMethod.methodID : ''}
+                                        buttonRef={addPaymentMethodAnchorRef}
+                                        onListContentSizeChange={shouldShowCardMenu ? setMenuPosition : () => {}}
+                                    />
+                                </Section>
+                            ) : null}
+
+                            {hasWallet && (
+                                <Section
+                                    subtitle={translate(`walletPage.sendAndReceiveMoney`)}
+                                    title={translate('walletPage.expensifyWallet')}
+                                    isCentralPane
+                                    subtitleMuted
+                                    titleStyles={styles.accountSettingsSectionTitle}
+                                >
+                                    <>
+                                        {shouldShowLoadingSpinner ? (
+                                            <ActivityIndicator
+                                                color={theme.spinner}
+                                                size={CONST.ACTIVITY_INDICATOR_SIZE.LARGE}
+                                                style={[styles.mt7, styles.mb5]}
+                                            />
+                                        ) : hasActivatedWallet ? (
+                                            <OfflineWithFeedback
+                                                pendingAction={CONST.RED_BRICK_ROAD_PENDING_ACTION.ADD}
+                                                errors={walletTerms?.errors}
+                                                onClose={clearWalletTermsError}
+                                                errorRowStyles={[styles.ml10, styles.mr2]}
+                                                style={[styles.mt4, styles.mb2]}
+                                            >
+                                                <MenuItemWithTopDescription
+                                                    description={translate('walletPage.balance')}
+                                                    title={convertToDisplayString(userWallet?.currentBalance ?? 0)}
+                                                    titleStyle={styles.textHeadlineH2}
+                                                    interactive={false}
+                                                    wrapperStyle={styles.sectionMenuItemTopDescription}
+                                                    copyValue={convertToDisplayString(userWallet?.currentBalance ?? 0)}
+                                                />
+                                            </OfflineWithFeedback>
+                                        ) : null}
+
+                                        <KYCWall
+                                            onSuccessfulKYC={(_iouPaymentType?: PaymentMethodType, source?: Source) => navigateToWalletOrTransferBalancePage(source)}
+                                            onSelectPaymentMethod={(selectedPaymentMethod: string) => {
+                                                if (hasActivatedWallet || selectedPaymentMethod !== CONST.PAYMENT_METHODS.PERSONAL_BANK_ACCOUNT) {
+                                                    return;
+                                                }
+                                                // To allow upgrading to a gold wallet, continue with the KYC flow after adding a bank account
+                                                setPersonalBankAccountContinueKYCOnSuccess(ROUTES.SETTINGS_WALLET);
+                                            }}
+                                            enablePaymentsRoute={ROUTES.SETTINGS_ENABLE_PAYMENTS}
+                                            addBankAccountRoute={ROUTES.SETTINGS_ADD_BANK_ACCOUNT.route}
+                                            addDebitCardRoute={ROUTES.SETTINGS_ADD_DEBIT_CARD}
+                                            source={hasActivatedWallet ? CONST.KYC_WALL_SOURCE.TRANSFER_BALANCE : CONST.KYC_WALL_SOURCE.ENABLE_WALLET}
+                                            shouldIncludeDebitCard={hasActivatedWallet}
+                                        >
+                                            {(triggerKYCFlow: (event?: GestureResponderEvent | KeyboardEvent, iouPaymentType?: PaymentMethodType) => void, buttonRef: RefObject<View>) => {
+                                                if (shouldShowLoadingSpinner) {
+                                                    return null;
+                                                }
+
+                                                if (hasActivatedWallet) {
+                                                    return (
+                                                        <MenuItem
+                                                            ref={buttonRef as ForwardedRef<View>}
+                                                            title={translate('common.transferBalance')}
+                                                            icon={Expensicons.Transfer}
+                                                            onPress={triggerKYCFlow}
+                                                            shouldShowRightIcon
+                                                            disabled={network.isOffline}
+                                                            wrapperStyle={[
+                                                                styles.transferBalance,
+                                                                shouldUseNarrowLayout ? styles.mhn5 : styles.mhn8,
+                                                                shouldUseNarrowLayout ? styles.ph5 : styles.ph8,
+                                                            ]}
+                                                        />
+                                                    );
+                                                }
+
+                                                if (isPendingOnfidoResult) {
+                                                    return (
+                                                        <View style={alertViewStyle}>
+                                                            <Icon
+                                                                src={Expensicons.Hourglass}
+                                                                fill={theme.icon}
+                                                            />
+
+                                                            <Text style={alertTextStyle}>{translate('walletPage.walletActivationPending')}</Text>
+                                                        </View>
+                                                    );
+                                                }
+
+                                                if (hasFailedOnfido) {
+                                                    return (
+                                                        <View style={alertViewStyle}>
+                                                            <Icon
+                                                                src={Expensicons.Exclamation}
+                                                                fill={theme.icon}
+                                                            />
+
+                                                            <Text style={alertTextStyle}>{translate('walletPage.walletActivationFailed')}</Text>
+                                                        </View>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <MenuItem
+                                                        title={translate('walletPage.enableWallet')}
+                                                        icon={Expensicons.Wallet}
+                                                        ref={buttonRef as ForwardedRef<View>}
+                                                        onPress={() => {
+                                                            if (isActingAsDelegate) {
+                                                                setIsNoDelegateAccessMenuVisible(true);
+                                                                return;
+                                                            }
+
+                                                            if (!isUserValidated) {
+                                                                Navigation.navigate(ROUTES.SETTINGS_WALLET_VERIFY_ACCOUNT.getRoute(ROUTES.SETTINGS_WALLET, ROUTES.SETTINGS_ENABLE_PAYMENTS));
+                                                                return;
+                                                            }
+                                                            Navigation.navigate(ROUTES.SETTINGS_ENABLE_PAYMENTS);
+                                                        }}
+                                                        disabled={network.isOffline}
+                                                        wrapperStyle={[
+                                                            styles.transferBalance,
+                                                            shouldUseNarrowLayout ? styles.mhn5 : styles.mhn8,
+                                                            shouldUseNarrowLayout ? styles.ph5 : styles.ph8,
+                                                        ]}
+                                                    />
+                                                );
+                                            }}
+                                        </KYCWall>
+                                    </>
+                                </Section>
+                            )}
+                        </OfflineWithFeedback>
+                    </View>
+                </ScrollView>
+                <Popover
+                    isVisible={shouldShowDefaultDeleteMenu}
+                    onClose={hideDefaultDeleteMenu}
+                    anchorPosition={{
+                        top: anchorPosition.anchorPositionTop,
+                        right: anchorPosition.anchorPositionRight,
+                    }}
+                    anchorRef={paymentMethodButtonRef as RefObject<View>}
+                >
+                    {!showConfirmDeleteModal && (
+                        <View
+                            style={[
+                                !shouldUseNarrowLayout
+                                    ? {
+                                          ...styles.sidebarPopover,
+                                          ...styles.pv4,
+                                      }
+                                    : styles.pt5,
+                            ]}
+                        >
+                            {isPopoverBottomMount && (
+                                <MenuItem
+                                    title={paymentMethod.formattedSelectedPaymentMethod.title}
+                                    icon={paymentMethod.formattedSelectedPaymentMethod.icon?.icon}
+                                    iconHeight={paymentMethod.formattedSelectedPaymentMethod.icon?.iconHeight ?? paymentMethod.formattedSelectedPaymentMethod.icon?.iconSize}
+                                    iconWidth={paymentMethod.formattedSelectedPaymentMethod.icon?.iconWidth ?? paymentMethod.formattedSelectedPaymentMethod.icon?.iconSize}
+                                    iconStyles={paymentMethod.formattedSelectedPaymentMethod.icon?.iconStyles}
+                                    description={paymentMethod.formattedSelectedPaymentMethod.description}
+                                    wrapperStyle={[styles.mb4, styles.ph5, styles.pv0]}
+                                    interactive={false}
+                                    displayInDefaultIconColor
+                                />
+                            )}
+                            {shouldShowMakeDefaultButton && (
+                                <MenuItem
+                                    title={translate('walletPage.setDefaultConfirmation')}
+                                    icon={Expensicons.Star}
+                                    onPress={() => {
+                                        if (isActingAsDelegate) {
+                                            closeModal(() => {
+                                                setIsNoDelegateAccessMenuVisible(true);
+                                            });
+                                            return;
+                                        }
+                                        makeDefaultPaymentMethod();
+                                        setShouldShowDefaultDeleteMenu(false);
+                                    }}
+                                    wrapperStyle={[styles.pv3, styles.ph5, !shouldUseNarrowLayout ? styles.sidebarPopover : {}]}
+                                    numberOfLinesTitle={0}
+                                />
+                            )}
+                            <MenuItem
+                                title={translate('common.delete')}
+                                icon={Expensicons.Trashcan}
+                                onPress={() => {
+                                    if (isActingAsDelegate) {
+                                        closeModal(() => {
+                                            setIsNoDelegateAccessMenuVisible(true);
+                                        });
+                                        return;
+                                    }
+                                    closeModal(() => setShowConfirmDeleteModal(true));
+                                }}
+                                wrapperStyle={[styles.pv3, styles.ph5, !shouldUseNarrowLayout ? styles.sidebarPopover : {}]}
+                            />
+                        </View>
+                    )}
+                </Popover>
+                <Popover
+                    isVisible={shouldShowCardMenu}
+                    onClose={hideCardMenu}
+                    anchorPosition={{
+                        top: anchorPosition.anchorPositionTop,
+                        right: anchorPosition.anchorPositionRight,
+                    }}
+                    anchorRef={paymentMethodButtonRef as RefObject<View>}
+                >
+                    <View
+                        style={[
+                            !shouldUseNarrowLayout
+                                ? {
+                                      ...styles.sidebarPopover,
+                                      ...styles.pv4,
+                                  }
+                                : styles.pt5,
+                        ]}
+                    >
+                        {isPopoverBottomMount && (
+                            <MenuItem
+                                title={paymentMethod.formattedSelectedPaymentMethod.title}
+                                icon={paymentMethod.formattedSelectedPaymentMethod.icon?.icon}
+                                iconHeight={paymentMethod.formattedSelectedPaymentMethod.icon?.iconHeight ?? paymentMethod.formattedSelectedPaymentMethod.icon?.iconSize}
+                                iconWidth={paymentMethod.formattedSelectedPaymentMethod.icon?.iconWidth ?? paymentMethod.formattedSelectedPaymentMethod.icon?.iconSize}
+                                iconStyles={paymentMethod.formattedSelectedPaymentMethod.icon?.iconStyles}
+                                description={paymentMethod.formattedSelectedPaymentMethod.description}
+                                wrapperStyle={[styles.mb4, styles.ph5, styles.pv0]}
+                                interactive={false}
+                                displayInDefaultIconColor
+                            />
+                        )}
+                        <MenuItem
+                            icon={Expensicons.MoneySearch}
+                            title={translate('workspace.common.viewTransactions')}
+                            onPress={() => {
+                                Navigation.navigate(
+                                    ROUTES.SEARCH_ROOT.getRoute({
+                                        query: buildCannedSearchQuery({
+                                            type: CONST.SEARCH.DATA_TYPES.EXPENSE,
+                                            status: CONST.SEARCH.STATUS.EXPENSE.ALL,
+                                            cardID: String(paymentMethod.methodID),
+                                        }),
+                                    }),
+                                );
+                            }}
+                        />
+                    </View>
+                </Popover>
                 <ConfirmModal
-                    danger
-                    title={translate('common.areYouSure')}
-                    prompt={translate('initialSettingsPage.signOutConfirmationText')}
-                    confirmText={translate('initialSettingsPage.signOut')}
+                    isVisible={showConfirmDeleteModal}
+                    onConfirm={() => {
+                        hideDefaultDeleteMenu();
+                        deletePaymentMethod();
+                    }}
+                    onCancel={hideDefaultDeleteMenu}
+                    title={translate('walletPage.deleteAccount')}
+                    prompt={translate('walletPage.deleteConfirmation')}
+                    confirmText={translate('common.delete')}
                     cancelText={translate('common.cancel')}
-                    isVisible={shouldShowSignoutConfirmModal}
-                    onConfirm={() => signOut(true)}
-                    onCancel={() => toggleSignoutConfirmModal(false)}
+                    shouldShowCancelButton
+                    danger
+                    onModalHide={resetSelectedPaymentMethodData}
                 />
-            </ScrollView>
-            {shouldDisplayLHB && <NavigationTabBar selectedTab={NAVIGATION_TABS.SETTINGS} />}
-        </ScreenWrapper>
+            </ScreenWrapper>
+            <AddPaymentMethodMenu
+                isVisible={shouldShowAddPaymentMenu}
+                onClose={hideAddPaymentMenu}
+                anchorPosition={{
+                    horizontal: anchorPosition.anchorPositionHorizontal,
+                    vertical: anchorPosition.anchorPositionVertical - CONST.MODAL.POPOVER_MENU_PADDING,
+                }}
+                onItemSelected={(method: string) => addPaymentMethodTypePressed(method)}
+                anchorRef={addPaymentMethodAnchorRef}
+                shouldShowPersonalBankAccountOption
+            />
+            <DelegateNoAccessModal
+                isNoDelegateAccessMenuVisible={isNoDelegateAccessMenuVisible}
+                onClose={() => setIsNoDelegateAccessMenuVisible(false)}
+            />
+        </>
     );
 }
 
-InitialSettingsPage.displayName = 'InitialSettingsPage';
+WalletPage.displayName = 'WalletPage';
 
-export default withCurrentUserPersonalDetails(InitialSettingsPage);
+export default WalletPage;
